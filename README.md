@@ -9,6 +9,7 @@ A small Soroban smart contract prototype for token payments, platform-fee distri
 ## 🌟 Features
 
 - **Token payments**: Transfer Soroban token-contract balances directly from a payer to a registered merchant and the admin fee recipient
+- **Idempotent order IDs**: A merchant order can only be paid once, so client retries cannot double-charge a payer
 - **Escrow**: Hold tokens in the contract until the buyer releases early, anyone releases after the deadline, or the seller refunds the buyer
 - **Merchant registry**: Admin registration and per-merchant volume/count tracking
 - **Platform fee**: Admin-configurable fee in basis points, capped at 10,000 (100%)
@@ -71,13 +72,19 @@ make test
 |---|---|
 | `initialize(admin, platform_fee)` | Set the admin and initial fee once |
 | `register_merchant(id, address, name)` | Add a merchant; admin authorization required |
-| `process_payment(payer, merchant_id, token, amount, order_id)` | Transfer payment and fee directly from payer; payer authorization required |
+| `process_payment(payer, merchant_id, token, amount, order_id)` | Transfer payment and fee directly from payer; payer authorization required; a second payment for the same `(merchant_id, order_id)` is rejected |
 | `create_escrow(buyer, seller, token, amount, order_id, release_time)` | Transfer tokens into contract custody; buyer authorization required |
 | `release_escrow(id)` | Buyer may release before the deadline; after it, anyone may trigger release |
 | `refund_escrow(id)` | Seller may refund an active escrow to its buyer |
 | `get_payment(id)`, `get_escrow(id)`, `get_merchant(id)` | Read stored records |
 | `update_platform_fee(new_fee)` | Change fee; admin authorization required |
 | `get_platform_fee()` | Read the current fee in basis points |
+
+### Duplicate order protection
+
+`process_payment` treats `order_id` as idempotent per merchant. Before any token transfer it checks whether the `(merchant_id, order_id)` pair has already been paid and panics with `Order already paid` if so, leaving balances, payment records, and merchant statistics untouched. The association is stored as part of the successful payment transaction, and only after the token transfers succeed, so a failed transfer never reserves an order ID and the payer can retry with the same ID.
+
+Order IDs are scoped to a merchant: two different merchants may each use the same `order_id` for their own orders.
 
 ## 🧪 Testing
 

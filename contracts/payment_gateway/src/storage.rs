@@ -12,6 +12,8 @@ enum DataKey {
     Merchant(String),
     Payment(u64),
     Escrow(u64),
+    /// Maps a merchant-scoped order ID to the payment that settled it.
+    OrderPayment(String, String),
 }
 
 pub fn set_admin(env: &Env, admin: &Address) {
@@ -81,6 +83,27 @@ pub fn get_payment(env: &Env, payment_id: u64) -> Option<Payment> {
     env.storage()
         .persistent()
         .get(&DataKey::Payment(payment_id))
+}
+
+pub fn set_order_payment(env: &Env, merchant_id: &String, order_id: &String, payment_id: u64) {
+    env.storage().persistent().set(
+        &DataKey::OrderPayment(merchant_id.clone(), order_id.clone()),
+        &payment_id,
+    );
+}
+
+pub fn get_order_payment(env: &Env, merchant_id: &String, order_id: &String) -> Option<u64> {
+    env.storage().persistent().get(&DataKey::OrderPayment(
+        merchant_id.clone(),
+        order_id.clone(),
+    ))
+}
+
+pub fn has_order_payment(env: &Env, merchant_id: &String, order_id: &String) -> bool {
+    env.storage().persistent().has(&DataKey::OrderPayment(
+        merchant_id.clone(),
+        order_id.clone(),
+    ))
 }
 
 pub fn get_next_escrow_id(env: &Env) -> u64 {

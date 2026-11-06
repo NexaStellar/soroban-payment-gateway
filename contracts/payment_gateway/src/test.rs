@@ -935,6 +935,180 @@ fn failed_payment_due_to_insufficient_balance_leaves_state_unchanged() {
     assert_eq!(merchant.transaction_count, 0);
 }
 
+// =========================================================================
+// Idempotent Order IDs: Duplicates, Cross-Merchant Reuse, Failed Transfers
+// =========================================================================
+
+#[test]
+fn duplicate_payment_for_same_merchant_order_is_rejected() {
+    let (env, contract_id, admin, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let merchant_address = Address::generate(&env);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let order_id = String::from_str(&env, "order-duplicate");
+
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &20_000);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    // First payment for the merchant/order pair succeeds and records its ID
+    let payment_id =
+        client.process_payment(&payer, &merchant_id, &token_address, &10_000, &order_id);
+    assert_eq!(payment_id, 1);
+    assert_eq!(client.get_payment(&payment_id).unwrap().order_id, order_id);
+
+    // A retry for the same order fails even though the payer could afford it
+    let res = client.mock_all_auths().try_process_payment(
+        &payer,
+        &merchant_id,
+        &token_address,
+        &10_000,
+        &order_id,
+    );
+    assert!(res.is_err());
+
+    // No second charge, no second payment record, no stats change
+    let token = token::Client::new(&env, &token_address);
+    assert_eq!(token.balance(&payer), 10_000);
+    assert_eq!(token.balance(&merchant_address), 9_750);
+    assert_eq!(token.balance(&admin), 250);
+    assert!(client.get_payment(&2).is_none());
+
+    let merchant = client.get_merchant(&merchant_id).unwrap();
+    assert_eq!(merchant.total_volume, 10_000);
+    assert_eq!(merchant.transaction_count, 1);
+}
+
+#[test]
+#[should_panic(expected = "Order already paid")]
+fn duplicate_order_is_rejected_before_any_token_transfer() {
+    let (env, contract_id, _, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let broke_payer = Address::generate(&env);
+    let merchant_address = Address::generate(&env);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let order_id = String::from_str(&env, "order-check-order-of-operations");
+
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &10_000);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    client.process_payment(&payer, &merchant_id, &token_address, &10_000, &order_id);
+
+    // The retry pays with an unfunded account, so an insufficient-balance
+    // failure would mean the transfer was attempted before the duplicate check.
+    client.process_payment(
+        &broke_payer,
+        &merchant_id,
+        &token_address,
+        &10_000,
+        &order_id,
+    );
+}
+
+#[test]
+fn same_order_id_can_be_paid_to_different_merchants() {
+    let (env, contract_id, _, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let first_merchant_address = Address::generate(&env);
+    let second_merchant_address = Address::generate(&env);
+    let first_merchant_id = String::from_str(&env, "merchant-1");
+    let second_merchant_id = String::from_str(&env, "merchant-2");
+    let order_id = String::from_str(&env, "shared-order-id");
+
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &20_000);
+    register_merchant(&client, &env, "merchant-1", &first_merchant_address);
+    register_merchant(&client, &env, "merchant-2", &second_merchant_address);
+
+    let first_payment_id = client.process_payment(
+        &payer,
+        &first_merchant_id,
+        &token_address,
+        &10_000,
+        &order_id,
+    );
+    let second_payment_id = client.process_payment(
+        &payer,
+        &second_merchant_id,
+        &token_address,
+        &10_000,
+        &order_id,
+    );
+
+    assert_eq!(first_payment_id, 1);
+    assert_eq!(second_payment_id, 2);
+
+    let token = token::Client::new(&env, &token_address);
+    assert_eq!(token.balance(&payer), 0);
+    assert_eq!(token.balance(&first_merchant_address), 9_750);
+    assert_eq!(token.balance(&second_merchant_address), 9_750);
+
+    assert_eq!(
+        client.get_payment(&first_payment_id).unwrap().merchant_id,
+        first_merchant_id
+    );
+    assert_eq!(
+        client.get_payment(&second_payment_id).unwrap().merchant_id,
+        second_merchant_id
+    );
+
+    assert_eq!(
+        client
+            .get_merchant(&first_merchant_id)
+            .unwrap()
+            .transaction_count,
+        1
+    );
+    assert_eq!(
+        client
+            .get_merchant(&second_merchant_id)
+            .unwrap()
+            .transaction_count,
+        1
+    );
+}
+
+#[test]
+fn failed_token_transfer_does_not_reserve_order_id() {
+    let (env, contract_id, admin, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let merchant_address = Address::generate(&env);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let order_id = String::from_str(&env, "order-retry-after-failure");
+
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &300);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    // Insufficient balance aborts the payment
+    let res = client.mock_all_auths().try_process_payment(
+        &payer,
+        &merchant_id,
+        &token_address,
+        &1_000,
+        &order_id,
+    );
+    assert!(res.is_err());
+    assert!(client.get_payment(&1).is_none());
+
+    // Once funded, the same order ID can still be paid
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &700);
+    let payment_id =
+        client.process_payment(&payer, &merchant_id, &token_address, &1_000, &order_id);
+
+    assert_eq!(payment_id, 1);
+
+    let token = token::Client::new(&env, &token_address);
+    assert_eq!(token.balance(&payer), 0);
+    assert_eq!(token.balance(&merchant_address), 975);
+    assert_eq!(token.balance(&admin), 25);
+
+    let merchant = client.get_merchant(&merchant_id).unwrap();
+    assert_eq!(merchant.total_volume, 1_000);
+    assert_eq!(merchant.transaction_count, 1);
+}
+
 #[test]
 fn failed_escrow_creation_due_to_insufficient_balance_leaves_state_unchanged() {
     let (env, contract_id, _, token_address) = setup();

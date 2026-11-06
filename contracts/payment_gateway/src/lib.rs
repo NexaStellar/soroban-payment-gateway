@@ -89,7 +89,8 @@ impl PaymentGateway {
     /// * `merchant_id` - Merchant receiving the payment
     /// * `token` - Token contract address
     /// * `amount` - Payment amount
-    /// * `order_id` - Unique order identifier
+    /// * `order_id` - Merchant-scoped order identifier; reusing it for the same
+    ///   merchant is rejected, while other merchants may use the same value
     pub fn process_payment(
         env: Env,
         payer: Address,
@@ -109,6 +110,12 @@ impl PaymentGateway {
 
         if !merchant.active {
             panic!("Merchant is not active");
+        }
+
+        // Order IDs are idempotent per merchant: reject a retry before any token
+        // movement so the same order can never be settled twice.
+        if storage::has_order_payment(&env, &merchant_id, &order_id) {
+            panic!("Order already paid");
         }
 
         // Split the division first so valid large payments cannot overflow.
@@ -141,6 +148,9 @@ impl PaymentGateway {
         };
 
         storage::set_payment(&env, payment_id, &payment);
+        // Reserve the order ID only once the transfers have succeeded. A panic
+        // anywhere above rolls this entry back with the rest of the transaction.
+        storage::set_order_payment(&env, &merchant_id, &order_id, payment_id);
 
         // Update merchant stats
         let mut updated_merchant = merchant;
