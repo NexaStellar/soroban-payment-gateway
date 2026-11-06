@@ -3,7 +3,7 @@ members = ["contracts/payment_gateway"]
 resolver = "2"
 
 [workspace.dependencies]
-soroban-sdk = "21.0.0"
+soroban-sdk = "29.0.1"
 
 [profile.release]
 opt-level = "z"
