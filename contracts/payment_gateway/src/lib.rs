@@ -163,7 +163,16 @@ impl PaymentGateway {
 
         env.events().publish(
             ("payment_processed",),
-            (payment_id, payer, merchant_id, amount),
+            PaymentProcessedEvent {
+                payment_id,
+                payer,
+                merchant_id,
+                merchant_address: updated_merchant.address,
+                token,
+                order_id,
+                amount,
+                platform_fee: fee_amount,
+            },
         );
 
         payment_id
@@ -218,8 +227,18 @@ impl PaymentGateway {
 
         storage::set_escrow(&env, escrow_id, &escrow);
 
-        env.events()
-            .publish(("escrow_created",), (escrow_id, buyer, seller, amount));
+        env.events().publish(
+            ("escrow_created",),
+            EscrowCreatedEvent {
+                escrow_id,
+                buyer,
+                seller,
+                token,
+                order_id,
+                amount,
+                release_time,
+            },
+        );
 
         escrow_id
     }
@@ -254,7 +273,14 @@ impl PaymentGateway {
 
         env.events().publish(
             ("escrow_released",),
-            (escrow_id, escrow.seller, escrow.amount),
+            EscrowReleasedEvent {
+                escrow_id,
+                buyer: escrow.buyer,
+                seller: escrow.seller,
+                token: escrow.token,
+                order_id: escrow.order_id,
+                amount: escrow.amount,
+            },
         );
     }
 
@@ -283,7 +309,14 @@ impl PaymentGateway {
 
         env.events().publish(
             ("escrow_refunded",),
-            (escrow_id, escrow.buyer, escrow.amount),
+            EscrowRefundedEvent {
+                escrow_id,
+                buyer: escrow.buyer,
+                seller: escrow.seller,
+                token: escrow.token,
+                order_id: escrow.order_id,
+                amount: escrow.amount,
+            },
         );
     }
 

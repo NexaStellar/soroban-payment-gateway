@@ -1,7 +1,7 @@
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
-    token, Address, Env, IntoVal, String,
+    testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+    token, Address, Env, IntoVal, String, TryFromVal, Val, Vec,
 };
 
 fn setup() -> (Env, Address, Address, Address) {
@@ -16,6 +16,25 @@ fn setup() -> (Env, Address, Address, Address) {
     PaymentGatewayClient::new(&env, &contract_id).initialize(&admin, &250);
 
     (env, contract_id, admin, token_address)
+}
+
+/// Returns the events published by the gateway itself, in emission order.
+fn gateway_events(env: &Env, contract_id: &Address) -> Vec<(Vec<Val>, Val)> {
+    let mut events = Vec::new(env);
+    for (address, topics, data) in env.events().all() {
+        if address == *contract_id {
+            events.push_back((topics, data));
+        }
+    }
+    events
+}
+
+/// Asserts an event carries exactly one topic equal to the expected name.
+/// The contract publishes the event name as a Soroban string.
+fn assert_event_topic(env: &Env, topics: &Vec<Val>, expected: &str) {
+    assert_eq!(topics.len(), 1);
+    let topic = String::try_from_val(env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, String::from_str(env, expected));
 }
 
 fn register_merchant(
@@ -1136,4 +1155,133 @@ fn failed_escrow_creation_due_to_insufficient_balance_leaves_state_unchanged() {
     assert_eq!(token.balance(&buyer), 200);
     assert_eq!(token.balance(&contract_id), 0);
     assert!(client.get_escrow(&1).is_none());
+}
+
+// =========================================================================
+// Event Payloads: Token, Order, and Party Context
+// =========================================================================
+
+#[test]
+fn payment_processed_event_exposes_token_order_and_fee_context() {
+    let (env, contract_id, admin, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let merchant_address = Address::generate(&env);
+    let merchant_id = String::from_str(&env, "merchant-events");
+    let order_id = String::from_str(&env, "order-events");
+
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &10_000);
+    register_merchant(&client, &env, "merchant-events", &merchant_address);
+
+    let payment_id =
+        client.process_payment(&payer, &merchant_id, &token_address, &10_000, &order_id);
+
+    let events = gateway_events(&env, &contract_id);
+    let (topics, data) = events.last().unwrap();
+    assert_event_topic(&env, &topics, "payment_processed");
+
+    let event = PaymentProcessedEvent::try_from_val(&env, &data).unwrap();
+    assert_eq!(
+        event,
+        PaymentProcessedEvent {
+            payment_id,
+            payer: payer.clone(),
+            merchant_id: merchant_id.clone(),
+            merchant_address: merchant_address.clone(),
+            token: token_address.clone(),
+            order_id: order_id.clone(),
+            amount: 10_000,
+            platform_fee: 250,
+        }
+    );
+
+    // The event matches the stored record it describes.
+    let payment = client.get_payment(&payment_id).unwrap();
+    assert_eq!(event.payment_id, payment.id);
+    assert_eq!(event.payer, payment.payer);
+    assert_eq!(event.amount, payment.amount);
+    assert_eq!(event.platform_fee, payment.fee_amount);
+    assert_eq!(event.order_id, payment.order_id);
+    assert_eq!(
+        token::Client::new(&env, &token_address).balance(&admin),
+        250
+    );
+}
+
+#[test]
+fn escrow_created_and_released_events_expose_parties_token_and_order() {
+    let (env, contract_id, _, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let order_id = String::from_str(&env, "order-escrow-events");
+
+    env.ledger().set_timestamp(100);
+    token::StellarAssetClient::new(&env, &token_address).mint(&buyer, &500);
+
+    let escrow_id = client.create_escrow(&buyer, &seller, &token_address, &500, &order_id, &200);
+
+    let events = gateway_events(&env, &contract_id);
+    let (topics, data) = events.last().unwrap();
+    assert_event_topic(&env, &topics, "escrow_created");
+    assert_eq!(
+        EscrowCreatedEvent::try_from_val(&env, &data).unwrap(),
+        EscrowCreatedEvent {
+            escrow_id,
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            token: token_address.clone(),
+            order_id: order_id.clone(),
+            amount: 500,
+            release_time: 200,
+        }
+    );
+
+    client.release_escrow(&escrow_id);
+
+    let events = gateway_events(&env, &contract_id);
+    let (topics, data) = events.last().unwrap();
+    assert_event_topic(&env, &topics, "escrow_released");
+    assert_eq!(
+        EscrowReleasedEvent::try_from_val(&env, &data).unwrap(),
+        EscrowReleasedEvent {
+            escrow_id,
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            token: token_address.clone(),
+            order_id: order_id.clone(),
+            amount: 500,
+        }
+    );
+}
+
+#[test]
+fn escrow_refunded_event_exposes_parties_token_and_order() {
+    let (env, contract_id, _, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let order_id = String::from_str(&env, "order-escrow-refund-events");
+
+    env.ledger().set_timestamp(100);
+    token::StellarAssetClient::new(&env, &token_address).mint(&buyer, &500);
+
+    let escrow_id = client.create_escrow(&buyer, &seller, &token_address, &500, &order_id, &200);
+
+    client.refund_escrow(&escrow_id);
+
+    let events = gateway_events(&env, &contract_id);
+    let (topics, data) = events.last().unwrap();
+    assert_event_topic(&env, &topics, "escrow_refunded");
+    assert_eq!(
+        EscrowRefundedEvent::try_from_val(&env, &data).unwrap(),
+        EscrowRefundedEvent {
+            escrow_id,
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            token: token_address.clone(),
+            order_id: order_id.clone(),
+            amount: 500,
+        }
+    );
 }
