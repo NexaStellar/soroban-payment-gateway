@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contractevent, contracttype, Address, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,8 +19,7 @@ pub struct Payment {
 /// It is emitted once a payment has settled, so indexers can identify the
 /// asset and correlate the transaction with an application order without
 /// reading contract storage separately.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[contractevent(topics = ["payment_processed"])]
 pub struct PaymentProcessedEvent {
     pub payment_id: u64,
     pub payer: Address,

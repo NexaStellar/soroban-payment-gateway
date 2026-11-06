@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractevent, contractimpl, token, Address, Env, String};
 
 mod escrow;
 mod merchant;
@@ -17,6 +17,23 @@ mod test;
 
 #[contract]
 pub struct PaymentGateway;
+
+#[contractevent(topics = ["initialized"], data_format = "vec")]
+pub struct InitializedEvent {
+    pub admin: Address,
+    pub platform_fee: u32,
+}
+
+#[contractevent(topics = ["merchant_registered"], data_format = "vec")]
+pub struct MerchantRegisteredEvent {
+    pub merchant_id: String,
+    pub merchant_address: Address,
+}
+
+#[contractevent(topics = ["fee_updated"], data_format = "single-value")]
+pub struct PlatformFeeUpdatedEvent {
+    pub new_fee: u32,
+}
 
 fn calculate_fee(amount: i128, fee_bps: u32) -> i128 {
     let fee_bps = fee_bps as i128;
@@ -44,8 +61,11 @@ impl PaymentGateway {
         storage::set_admin(&env, &admin);
         storage::set_platform_fee(&env, platform_fee);
 
-        env.events()
-            .publish(("initialized",), (admin, platform_fee));
+        InitializedEvent {
+            admin,
+            platform_fee,
+        }
+        .publish(&env);
     }
 
     /// Register a new merchant
@@ -78,8 +98,11 @@ impl PaymentGateway {
 
         storage::set_merchant(&env, &merchant_id, &merchant);
 
-        env.events()
-            .publish(("merchant_registered",), (merchant_id, merchant_address));
+        MerchantRegisteredEvent {
+            merchant_id,
+            merchant_address,
+        }
+        .publish(&env);
     }
 
     /// Process a payment
@@ -161,19 +184,17 @@ impl PaymentGateway {
         updated_merchant.transaction_count += 1;
         storage::set_merchant(&env, &merchant_id, &updated_merchant);
 
-        env.events().publish(
-            ("payment_processed",),
-            PaymentProcessedEvent {
-                payment_id,
-                payer,
-                merchant_id,
-                merchant_address: updated_merchant.address,
-                token,
-                order_id,
-                amount,
-                platform_fee: fee_amount,
-            },
-        );
+        PaymentProcessedEvent {
+            payment_id,
+            payer,
+            merchant_id,
+            merchant_address: updated_merchant.address,
+            token,
+            order_id,
+            amount,
+            platform_fee: fee_amount,
+        }
+        .publish(&env);
 
         payment_id
     }
@@ -227,18 +248,16 @@ impl PaymentGateway {
 
         storage::set_escrow(&env, escrow_id, &escrow);
 
-        env.events().publish(
-            ("escrow_created",),
-            EscrowCreatedEvent {
-                escrow_id,
-                buyer,
-                seller,
-                token,
-                order_id,
-                amount,
-                release_time,
-            },
-        );
+        EscrowCreatedEvent {
+            escrow_id,
+            buyer,
+            seller,
+            token,
+            order_id,
+            amount,
+            release_time,
+        }
+        .publish(&env);
 
         escrow_id
     }
@@ -271,17 +290,15 @@ impl PaymentGateway {
         escrow.status = EscrowStatus::Released;
         storage::set_escrow(&env, escrow_id, &escrow);
 
-        env.events().publish(
-            ("escrow_released",),
-            EscrowReleasedEvent {
-                escrow_id,
-                buyer: escrow.buyer,
-                seller: escrow.seller,
-                token: escrow.token,
-                order_id: escrow.order_id,
-                amount: escrow.amount,
-            },
-        );
+        EscrowReleasedEvent {
+            escrow_id,
+            buyer: escrow.buyer,
+            seller: escrow.seller,
+            token: escrow.token,
+            order_id: escrow.order_id,
+            amount: escrow.amount,
+        }
+        .publish(&env);
     }
 
     /// Refund escrow to buyer
@@ -307,17 +324,15 @@ impl PaymentGateway {
         escrow.status = EscrowStatus::Refunded;
         storage::set_escrow(&env, escrow_id, &escrow);
 
-        env.events().publish(
-            ("escrow_refunded",),
-            EscrowRefundedEvent {
-                escrow_id,
-                buyer: escrow.buyer,
-                seller: escrow.seller,
-                token: escrow.token,
-                order_id: escrow.order_id,
-                amount: escrow.amount,
-            },
-        );
+        EscrowRefundedEvent {
+            escrow_id,
+            buyer: escrow.buyer,
+            seller: escrow.seller,
+            token: escrow.token,
+            order_id: escrow.order_id,
+            amount: escrow.amount,
+        }
+        .publish(&env);
     }
 
     /// Get payment details
@@ -346,7 +361,7 @@ impl PaymentGateway {
 
         storage::set_platform_fee(&env, new_fee);
 
-        env.events().publish(("fee_updated",), new_fee);
+        PlatformFeeUpdatedEvent { new_fee }.publish(&env);
     }
 
     /// Get current platform fee

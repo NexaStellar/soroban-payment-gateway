@@ -6,6 +6,10 @@
 
 A small Soroban smart contract prototype for token payments, platform-fee distribution, merchant records, and buyer-funded escrow. It is an unaudited alpha and is not suitable for production funds.
 
+## 📚 Documentation
+
+The [Soroban Payment Gateway documentation site](https://nexastellar.github.io/soroban-payment-gateway/) covers the contract interface, events, security limitations, and local development workflow.
+
 ## 🌟 Features
 
 - **Token payments**: Transfer Soroban token-contract balances directly from a payer to a registered merchant and the admin fee recipient

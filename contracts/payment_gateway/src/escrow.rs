@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contractevent, contracttype, Address, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,8 +15,7 @@ pub struct Escrow {
 }
 
 /// Data payload of the `escrow_created` event.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[contractevent(topics = ["escrow_created"])]
 pub struct EscrowCreatedEvent {
     pub escrow_id: u64,
     pub buyer: Address,
@@ -29,8 +28,7 @@ pub struct EscrowCreatedEvent {
 }
 
 /// Data payload of the `escrow_released` event.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[contractevent(topics = ["escrow_released"])]
 pub struct EscrowReleasedEvent {
     pub escrow_id: u64,
     pub buyer: Address,
@@ -41,8 +39,7 @@ pub struct EscrowReleasedEvent {
 }
 
 /// Data payload of the `escrow_refunded` event.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[contractevent(topics = ["escrow_refunded"])]
 pub struct EscrowRefundedEvent {
     pub escrow_id: u64,
     pub buyer: Address,
