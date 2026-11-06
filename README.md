@@ -86,6 +86,92 @@ make test
 
 Order IDs are scoped to a merchant: two different merchants may each use the same `order_id` for their own orders.
 
+## 📡 Events
+
+Each lifecycle event carries exactly one topic — the event name, published as a Soroban string — and a structured data payload. The tables below list every event and every data field the alpha contract emits; no other fields are included.
+
+| Topic | Data |
+|---|---|
+| `initialized` | `(admin: Address, platform_fee: u32)` |
+| `merchant_registered` | `(merchant_id: String, merchant_address: Address)` |
+| `payment_processed` | `PaymentProcessedEvent` map |
+| `escrow_created` | `EscrowCreatedEvent` map |
+| `escrow_released` | `EscrowReleasedEvent` map |
+| `escrow_refunded` | `EscrowRefundedEvent` map |
+| `fee_updated` | `new_fee: u32` |
+
+The "map" payloads are `#[contracttype]` structs, emitted as a Soroban map keyed by field name, so an indexer can decode them without a storage lookup. Each creation event is published after the token transfers succeed, and each terminal event after the record's status is updated.
+
+### `payment_processed`
+
+Emitted once per successful `process_payment` call, after the payment record, order reservation, and merchant statistics are stored.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `payment_id` | `u64` | Identifier of the stored payment record |
+| `payer` | `Address` | Account that was charged |
+| `merchant_id` | `String` | Merchant identifier used in the call |
+| `merchant_address` | `Address` | Merchant address that received the net amount |
+| `token` | `Address` | Token contract that was transferred |
+| `order_id` | `String` | Merchant-scoped order identifier supplied by the caller |
+| `amount` | `i128` | Gross amount charged to the payer, before the fee |
+| `platform_fee` | `i128` | Portion of `amount` transferred to the admin (0 when the configured fee yields no fee) |
+
+Example (field names as stored in the map, values illustrative):
+
+```json
+{
+  "payment_id": 1,
+  "payer": "G...PAYER",
+  "merchant_id": "merchant-1",
+  "merchant_address": "G...MERCHANT",
+  "token": "C...TOKEN",
+  "order_id": "order-1",
+  "amount": 10000,
+  "platform_fee": 250
+}
+```
+
+### `escrow_created`
+
+Emitted once per successful `create_escrow` call, after the tokens are held by the contract.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `escrow_id` | `u64` | Identifier of the stored escrow record |
+| `buyer` | `Address` | Account that funded the escrow |
+| `seller` | `Address` | Account that receives the funds on release |
+| `token` | `Address` | Token contract held in custody |
+| `order_id` | `String` | Order identifier supplied by the caller |
+| `amount` | `i128` | Amount held in custody |
+| `release_time` | `u64` | Unix timestamp at or after which anyone may release |
+
+### `escrow_released`
+
+Emitted once per successful `release_escrow` call, after the funds are transferred to the seller.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `escrow_id` | `u64` | Identifier of the released escrow |
+| `buyer` | `Address` | Buyer recorded on the escrow |
+| `seller` | `Address` | Seller that received the funds |
+| `token` | `Address` | Token contract transferred |
+| `order_id` | `String` | Order identifier recorded on the escrow |
+| `amount` | `i128` | Amount released to the seller |
+
+### `escrow_refunded`
+
+Emitted once per successful `refund_escrow` call, after the funds are returned to the buyer.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `escrow_id` | `u64` | Identifier of the refunded escrow |
+| `buyer` | `Address` | Buyer that received the refund |
+| `seller` | `Address` | Seller recorded on the escrow |
+| `token` | `Address` | Token contract transferred |
+| `order_id` | `String` | Order identifier recorded on the escrow |
+| `amount` | `i128` | Amount refunded to the buyer |
+
 ## 🧪 Testing
 
 ```bash
