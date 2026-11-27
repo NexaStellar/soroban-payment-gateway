@@ -51,7 +51,16 @@ fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
 
 #[test]
 fn persistent_records_renew_their_90_day_ttl_on_reads_and_writes() {
-    let (env, contract_id, _admin, token_address) = setup();
+    let env = Env::default();
+    let created_at = 1_000;
+    env.ledger().set_sequence_number(created_at);
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_id = env.register(PaymentGateway, ());
+    PaymentGatewayClient::new(&env, &contract_id).initialize(&admin, &250);
     let merchant_id = String::from_str(&env, "merchant-ttl");
     let order_id = String::from_str(&env, "order-ttl");
     let merchant_address = Address::generate(&env);
@@ -99,7 +108,6 @@ fn persistent_records_renew_their_90_day_ttl_on_reads_and_writes() {
         storage::set_order_payment(&env, &merchant_id, &order_id, payment.id);
     });
 
-    let created_at = env.ledger().sequence_number();
     for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
         assert_eq!(
             persistent_ttl(&env, &contract_id, key),
