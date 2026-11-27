@@ -49,6 +49,17 @@ The contract currently has no dispute resolution, subscriptions, merchant profil
 - **Assets:** The contract calls the Soroban token interface. It does not support arbitrary Stellar assets unless they are exposed through a compatible token contract.
 - **Trust:** The admin receives platform fees and can set the fee up to 100%. Escrow has no dispute process; before the deadline the buyer can release and the seller can refund.
 
+## Storage retention
+
+Merchant, payment, escrow, and merchant-order records use a rolling 90-day
+Soroban TTL, renewed on writes and successful reads. The contract instance,
+including its admin, fee, and counters, is also extended to 90 days when
+accessed. This is ledger-based and approximate; records not accessed in a
+successful transaction may expire after about 90 days. Failed transactions
+roll back TTL changes. In particular, order-idempotency records are finite:
+after an old mapping expires, the contract may accept that order ID again.
+This contract is not a permanent payment archive.
+
 ## 📋 Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable)

@@ -1,8 +1,13 @@
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, ContractEvents, Events, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, ContractEvents, Events, Ledger, MockAuth, MockAuthInvoke,
+    },
     token, Address, Env, Event, IntoVal, String,
 };
+
+use crate::storage::DataKey;
 
 fn setup() -> (Env, Address, Address, Address) {
     let env = Env::default();
@@ -34,6 +39,133 @@ fn register_merchant(
         merchant_address,
         &String::from_str(env, "Test merchant"),
     );
+}
+
+fn persistent_ttl(env: &Env, contract_id: &Address, key: &DataKey) -> u32 {
+    env.as_contract(contract_id, || env.storage().persistent().get_ttl(key))
+}
+
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+#[test]
+fn persistent_records_renew_their_90_day_ttl_on_reads_and_writes() {
+    let (env, contract_id, _admin, token_address) = setup();
+    let merchant_id = String::from_str(&env, "merchant-ttl");
+    let order_id = String::from_str(&env, "order-ttl");
+    let merchant_address = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let merchant = Merchant {
+        id: merchant_id.clone(),
+        address: merchant_address,
+        name: String::from_str(&env, "TTL merchant"),
+        active: true,
+        total_volume: 100,
+        transaction_count: 1,
+    };
+    let payment = Payment {
+        id: 1,
+        payer: buyer.clone(),
+        merchant_id: merchant_id.clone(),
+        token: token_address.clone(),
+        amount: 100,
+        fee_amount: 2,
+        order_id: order_id.clone(),
+        timestamp: env.ledger().timestamp(),
+        status: PaymentStatus::Completed,
+    };
+    let escrow = Escrow {
+        id: 1,
+        buyer,
+        seller,
+        token: token_address,
+        amount: 100,
+        order_id: order_id.clone(),
+        created_at: env.ledger().timestamp(),
+        release_time: env.ledger().timestamp() + 100,
+        status: EscrowStatus::Active,
+    };
+    let merchant_key = DataKey::Merchant(merchant_id.clone());
+    let payment_key = DataKey::Payment(payment.id);
+    let escrow_key = DataKey::Escrow(escrow.id);
+    let order_payment_key = DataKey::OrderPayment(merchant_id.clone(), order_id.clone());
+
+    env.as_contract(&contract_id, || {
+        storage::set_merchant(&env, &merchant_id, &merchant);
+        storage::set_payment(&env, payment.id, &payment);
+        storage::set_escrow(&env, escrow.id, &escrow);
+        storage::set_order_payment(&env, &merchant_id, &order_id, payment.id);
+    });
+
+    let created_at = env.ledger().sequence_number();
+    for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
+        assert_eq!(
+            persistent_ttl(&env, &contract_id, key),
+            storage::STORAGE_TTL_LEDGERS
+        );
+    }
+    assert_eq!(
+        instance_ttl(&env, &contract_id),
+        storage::STORAGE_TTL_LEDGERS
+    );
+
+    let near_expiry = created_at + storage::STORAGE_TTL_LEDGERS - 10;
+    env.ledger().set_sequence_number(near_expiry);
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            storage::get_merchant(&env, &merchant_id),
+            Some(merchant.clone())
+        );
+        assert!(storage::has_merchant(&env, &merchant_id));
+        assert_eq!(
+            storage::get_payment(&env, payment.id),
+            Some(payment.clone())
+        );
+        assert_eq!(storage::get_escrow(&env, escrow.id), Some(escrow.clone()));
+        assert_eq!(
+            storage::get_order_payment(&env, &merchant_id, &order_id),
+            Some(payment.id)
+        );
+        assert!(storage::has_order_payment(&env, &merchant_id, &order_id));
+    });
+
+    for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
+        assert_eq!(
+            persistent_ttl(&env, &contract_id, key),
+            storage::STORAGE_TTL_LEDGERS
+        );
+    }
+    assert_eq!(
+        instance_ttl(&env, &contract_id),
+        storage::STORAGE_TTL_LEDGERS
+    );
+
+    let near_renewed_expiry = near_expiry + storage::STORAGE_TTL_LEDGERS - 10;
+    env.ledger().set_sequence_number(near_renewed_expiry);
+    env.as_contract(&contract_id, || {
+        storage::set_merchant(&env, &merchant_id, &merchant);
+        storage::set_payment(&env, payment.id, &payment);
+        storage::set_escrow(&env, escrow.id, &escrow);
+        storage::set_order_payment(&env, &merchant_id, &order_id, payment.id);
+    });
+
+    for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
+        assert_eq!(
+            persistent_ttl(&env, &contract_id, key),
+            storage::STORAGE_TTL_LEDGERS
+        );
+    }
+
+    env.ledger()
+        .set_sequence_number(near_expiry + storage::STORAGE_TTL_LEDGERS + 1);
+    env.as_contract(&contract_id, || {
+        assert!(storage::get_merchant(&env, &merchant_id).is_some());
+        assert!(storage::get_payment(&env, payment.id).is_some());
+        assert!(storage::get_escrow(&env, escrow.id).is_some());
+        assert!(storage::has_order_payment(&env, &merchant_id, &order_id));
+    });
 }
 
 #[test]
