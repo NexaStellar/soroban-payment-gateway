@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a focused improvement to the contract
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include private keys, seed phrases, or funded account credentials.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and use case
+      description: What user need or limitation does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the observable contract behavior and any authorization requirements.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List testable outcomes, including relevant failure cases.
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
