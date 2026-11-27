@@ -1,8 +1,13 @@
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, ContractEvents, Events, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, ContractEvents, Events, Ledger, MockAuth, MockAuthInvoke,
+    },
     token, Address, Env, Event, IntoVal, String,
 };
+
+use crate::storage::DataKey;
 
 fn setup() -> (Env, Address, Address, Address) {
     let env = Env::default();
@@ -34,6 +39,141 @@ fn register_merchant(
         merchant_address,
         &String::from_str(env, "Test merchant"),
     );
+}
+
+fn persistent_ttl(env: &Env, contract_id: &Address, key: &DataKey) -> u32 {
+    env.as_contract(contract_id, || env.storage().persistent().get_ttl(key))
+}
+
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+#[test]
+fn persistent_records_renew_their_90_day_ttl_on_reads_and_writes() {
+    let env = Env::default();
+    let created_at = 1_000;
+    env.ledger().set_sequence_number(created_at);
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_id = env.register(PaymentGateway, ());
+    PaymentGatewayClient::new(&env, &contract_id).initialize(&admin, &250);
+    let merchant_id = String::from_str(&env, "merchant-ttl");
+    let order_id = String::from_str(&env, "order-ttl");
+    let merchant_address = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let merchant = Merchant {
+        id: merchant_id.clone(),
+        address: merchant_address,
+        name: String::from_str(&env, "TTL merchant"),
+        active: true,
+        total_volume: 100,
+        transaction_count: 1,
+    };
+    let payment = Payment {
+        id: 1,
+        payer: buyer.clone(),
+        merchant_id: merchant_id.clone(),
+        token: token_address.clone(),
+        amount: 100,
+        fee_amount: 2,
+        order_id: order_id.clone(),
+        timestamp: env.ledger().timestamp(),
+        status: PaymentStatus::Completed,
+    };
+    let escrow = Escrow {
+        id: 1,
+        buyer,
+        seller,
+        token: token_address,
+        amount: 100,
+        order_id: order_id.clone(),
+        created_at: env.ledger().timestamp(),
+        release_time: env.ledger().timestamp() + 100,
+        status: EscrowStatus::Active,
+    };
+    let merchant_key = DataKey::Merchant(merchant_id.clone());
+    let payment_key = DataKey::Payment(payment.id);
+    let escrow_key = DataKey::Escrow(escrow.id);
+    let order_payment_key = DataKey::OrderPayment(merchant_id.clone(), order_id.clone());
+
+    env.as_contract(&contract_id, || {
+        storage::set_merchant(&env, &merchant_id, &merchant);
+        storage::set_payment(&env, payment.id, &payment);
+        storage::set_escrow(&env, escrow.id, &escrow);
+        storage::set_order_payment(&env, &merchant_id, &order_id, payment.id);
+    });
+
+    for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
+        assert_eq!(
+            persistent_ttl(&env, &contract_id, key),
+            storage::STORAGE_TTL_LEDGERS
+        );
+    }
+    assert_eq!(
+        instance_ttl(&env, &contract_id),
+        storage::STORAGE_TTL_LEDGERS
+    );
+
+    let near_expiry = created_at + storage::STORAGE_TTL_LEDGERS - 10;
+    env.ledger().set_sequence_number(near_expiry);
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            storage::get_merchant(&env, &merchant_id),
+            Some(merchant.clone())
+        );
+        assert!(storage::has_merchant(&env, &merchant_id));
+        assert_eq!(
+            storage::get_payment(&env, payment.id),
+            Some(payment.clone())
+        );
+        assert_eq!(storage::get_escrow(&env, escrow.id), Some(escrow.clone()));
+        assert_eq!(
+            storage::get_order_payment(&env, &merchant_id, &order_id),
+            Some(payment.id)
+        );
+        assert!(storage::has_order_payment(&env, &merchant_id, &order_id));
+    });
+
+    for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
+        assert_eq!(
+            persistent_ttl(&env, &contract_id, key),
+            storage::STORAGE_TTL_LEDGERS
+        );
+    }
+    assert_eq!(
+        instance_ttl(&env, &contract_id),
+        storage::STORAGE_TTL_LEDGERS
+    );
+
+    let near_renewed_expiry = near_expiry + storage::STORAGE_TTL_LEDGERS - 10;
+    env.ledger().set_sequence_number(near_renewed_expiry);
+    env.as_contract(&contract_id, || {
+        storage::set_merchant(&env, &merchant_id, &merchant);
+        storage::set_payment(&env, payment.id, &payment);
+        storage::set_escrow(&env, escrow.id, &escrow);
+        storage::set_order_payment(&env, &merchant_id, &order_id, payment.id);
+    });
+
+    for key in [&merchant_key, &payment_key, &escrow_key, &order_payment_key] {
+        assert_eq!(
+            persistent_ttl(&env, &contract_id, key),
+            storage::STORAGE_TTL_LEDGERS
+        );
+    }
+
+    env.ledger()
+        .set_sequence_number(near_expiry + storage::STORAGE_TTL_LEDGERS + 1);
+    env.as_contract(&contract_id, || {
+        assert!(storage::get_merchant(&env, &merchant_id).is_some());
+        assert!(storage::get_payment(&env, payment.id).is_some());
+        assert!(storage::get_escrow(&env, escrow.id).is_some());
+        assert!(storage::has_order_payment(&env, &merchant_id, &order_id));
+    });
 }
 
 #[test]
@@ -85,6 +225,67 @@ fn payment_splits_amount_and_records_payment_and_merchant_volume() {
     let merchant = client.get_merchant(&merchant_id).unwrap();
     assert_eq!(merchant.total_volume, 10_000);
     assert_eq!(merchant.transaction_count, 1);
+}
+
+#[test]
+fn admin_can_deactivate_and_reactivate_a_merchant() {
+    let (env, contract_id, _, _) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let merchant_address = Address::generate(&env);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    client.set_merchant_active(&merchant_id, &false);
+    assert!(!client.get_merchant(&merchant_id).unwrap().active);
+
+    client.set_merchant_active(&merchant_id, &true);
+    assert!(client.get_merchant(&merchant_id).unwrap().active);
+}
+
+#[test]
+fn inactive_merchant_cannot_receive_payments() {
+    let (env, contract_id, _, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let merchant_address = Address::generate(&env);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+    client.set_merchant_active(&merchant_id, &false);
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &100);
+
+    let result = client.try_process_payment(
+        &payer,
+        &merchant_id,
+        &token_address,
+        &100,
+        &String::from_str(&env, "order-1"),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+        token::Client::new(&env, &token_address).balance(&payer),
+        100
+    );
+    assert_eq!(
+        token::Client::new(&env, &token_address).balance(&merchant_address),
+        0
+    );
+}
+
+#[test]
+fn merchant_activation_requires_admin_authorization() {
+    let (env, contract_id, _, _) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let merchant_address = Address::generate(&env);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    let result = client
+        .set_auths(&[])
+        .try_set_merchant_active(&merchant_id, &false);
+
+    assert!(result.is_err());
+    assert!(client.get_merchant(&merchant_id).unwrap().active);
 }
 
 #[test]
