@@ -122,7 +122,10 @@ fn inactive_merchant_cannot_receive_payments() {
     );
 
     assert!(result.is_err());
-    assert_eq!(token::Client::new(&env, &token_address).balance(&payer), 100);
+    assert_eq!(
+        token::Client::new(&env, &token_address).balance(&payer),
+        100
+    );
     assert_eq!(
         token::Client::new(&env, &token_address).balance(&merchant_address),
         0
