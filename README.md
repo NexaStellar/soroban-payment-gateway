@@ -15,11 +15,11 @@ The [Soroban Payment Gateway documentation site](https://nexastellar.github.io/s
 - **Token payments**: Transfer Soroban token-contract balances directly from a payer to a registered merchant and the admin fee recipient
 - **Idempotent order IDs**: A merchant order can only be paid once, so client retries cannot double-charge a payer
 - **Escrow**: Hold tokens in the contract until the buyer releases early, anyone releases after the deadline, or the seller refunds the buyer
-- **Merchant registry**: Admin registration and per-merchant volume/count tracking
+- **Merchant registry**: Admin registration, activation controls, and per-merchant volume/count tracking
 - **Platform fee**: Admin-configurable fee in basis points, capped at 10,000 (100%)
 - **Events and records**: Emit lifecycle events and store payment and escrow details
 
-The contract currently has no dispute resolution, subscriptions, merchant update/deactivation API, or on-chain refund-request flow.
+The contract currently has no dispute resolution, subscriptions, merchant profile update API, or on-chain refund-request flow.
 
 ## 🏗️ Architecture
 
@@ -76,6 +76,7 @@ make test
 |---|---|
 | `initialize(admin, platform_fee)` | Set the admin and initial fee once |
 | `register_merchant(id, address, name)` | Add a merchant; admin authorization required |
+| `set_merchant_active(id, active)` | Activate or deactivate a merchant; admin authorization required |
 | `process_payment(payer, merchant_id, token, amount, order_id)` | Transfer payment and fee directly from payer; payer authorization required; a second payment for the same `(merchant_id, order_id)` is rejected |
 | `create_escrow(buyer, seller, token, amount, order_id, release_time)` | Transfer tokens into contract custody; buyer authorization required |
 | `release_escrow(id)` | Buyer may release before the deadline; after it, anyone may trigger release |
@@ -98,6 +99,7 @@ Each lifecycle event carries exactly one topic — the event name, published as 
 |---|---|
 | `initialized` | `(admin: Address, platform_fee: u32)` |
 | `merchant_registered` | `(merchant_id: String, merchant_address: Address)` |
+| `merchant_status_updated` | `(merchant_id: String, active: bool)` |
 | `payment_processed` | `PaymentProcessedEvent` map |
 | `escrow_created` | `EscrowCreatedEvent` map |
 | `escrow_released` | `EscrowReleasedEvent` map |

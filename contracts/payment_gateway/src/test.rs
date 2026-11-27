@@ -88,6 +88,64 @@ fn payment_splits_amount_and_records_payment_and_merchant_volume() {
 }
 
 #[test]
+fn admin_can_deactivate_and_reactivate_a_merchant() {
+    let (env, contract_id, _, _) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let merchant_address = Address::generate(&env);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    client.set_merchant_active(&merchant_id, &false);
+    assert!(!client.get_merchant(&merchant_id).unwrap().active);
+
+    client.set_merchant_active(&merchant_id, &true);
+    assert!(client.get_merchant(&merchant_id).unwrap().active);
+}
+
+#[test]
+fn inactive_merchant_cannot_receive_payments() {
+    let (env, contract_id, _, token_address) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    let merchant_address = Address::generate(&env);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+    client.set_merchant_active(&merchant_id, &false);
+    token::StellarAssetClient::new(&env, &token_address).mint(&payer, &100);
+
+    let result = client.try_process_payment(
+        &payer,
+        &merchant_id,
+        &token_address,
+        &100,
+        &String::from_str(&env, "order-1"),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(token::Client::new(&env, &token_address).balance(&payer), 100);
+    assert_eq!(
+        token::Client::new(&env, &token_address).balance(&merchant_address),
+        0
+    );
+}
+
+#[test]
+fn merchant_activation_requires_admin_authorization() {
+    let (env, contract_id, _, _) = setup();
+    let client = PaymentGatewayClient::new(&env, &contract_id);
+    let merchant_id = String::from_str(&env, "merchant-1");
+    let merchant_address = Address::generate(&env);
+    register_merchant(&client, &env, "merchant-1", &merchant_address);
+
+    let result = client
+        .set_auths(&[])
+        .try_set_merchant_active(&merchant_id, &false);
+
+    assert!(result.is_err());
+    assert!(client.get_merchant(&merchant_id).unwrap().active);
+}
+
+#[test]
 fn buyer_can_release_escrow_before_release_time() {
     let (env, contract_id, _, token_address) = setup();
     let client = PaymentGatewayClient::new(&env, &contract_id);

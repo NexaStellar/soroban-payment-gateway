@@ -30,6 +30,12 @@ pub struct MerchantRegisteredEvent {
     pub merchant_address: Address,
 }
 
+#[contractevent(topics = ["merchant_status_updated"], data_format = "vec")]
+pub struct MerchantStatusUpdatedEvent {
+    pub merchant_id: String,
+    pub active: bool,
+}
+
 #[contractevent(topics = ["fee_updated"], data_format = "single-value")]
 pub struct PlatformFeeUpdatedEvent {
     pub new_fee: u32,
@@ -101,6 +107,23 @@ impl PaymentGateway {
         MerchantRegisteredEvent {
             merchant_id,
             merchant_address,
+        }
+        .publish(&env);
+    }
+
+    /// Activate or deactivate a merchant (admin only)
+    pub fn set_merchant_active(env: Env, merchant_id: String, active: bool) {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+
+        let mut merchant = storage::get_merchant(&env, &merchant_id)
+            .unwrap_or_else(|| panic!("Merchant not found"));
+        merchant.active = active;
+        storage::set_merchant(&env, &merchant_id, &merchant);
+
+        MerchantStatusUpdatedEvent {
+            merchant_id,
+            active,
         }
         .publish(&env);
     }
